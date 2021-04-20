@@ -7,12 +7,123 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-```{r cars}
-summary(cars)
+```{r}
+library(SummarizedExperiment)
+library(readxl)
+library(jaffelab)
+library(tidyverse)
+library(purrr)
 ```
 
 
 
 ```{r}
+rse_filenames <- list(gene=list(Astellas_DG="data/astellas_dg_hg38_rseGene_n263.rda", R21="data/rse_gene_Jlab_experiment_n60.Rdata"),
+                      exon=list(Astellas_DG="data/astellas_dg_hg38_rseExon_n263.rda", R21="data/rse_exon_Jlab_experiment_n60.Rdata"), 
+                      tx=list(Astellas_DG="data/astellas_dg_hg38_rseTx_n263.rda", R21="data/rse_tx_Jlab_experiment_n60.Rdata"), 
+                      jx=list(Astellas_DG="data/astellas_dg_hg38_rseJxn_n263.rda", R21="data/rse_jx_Jlab_experiment_n60.Rdata"))
+## load gene data
+rse_gene <- lapply(rse_filenames$gene, function(x) mget(load(x, verbose = TRUE)))
+
+## extract only objects names 'rse_gene'
+rse_gene <- map2(rse_gene, map(rse_gene, ~grep("rse_gene",names(.x))), pluck)
 
 ```
+```{r}
+brdf <- read.table("data/subjects_phenodata.tab", sep="\t", header=T)
+
+```
+
+
+Fix dataset specific issues.
+```{r}
+## R21 is missing all phenotype data and it lacks RNum
+rcd <- colData(rse_gene$R21)
+rcd$BrNum <- lapply(rcd$SAMPLE_ID, function(x) { ax <- strsplit(x, '_'); return(ax[[1]][1]) })
+rcd$Region <- lapply(rcd$SAMPLE_ID, function(x) { ax <- strsplit(x, '_'); return(ax[[1]][2]) })
+rcd$Age <- brdf$age[ match(rcd$BrNum, brdf$brnum)]
+rcd$Sex <- brdf$sex[ match(rcd$BrNum, brdf$brnum)]
+rcd$Race <- brdf$race[ match(rcd$BrNum, brdf$brnum)]
+rcd$Dx <- brdf$dx[ match(rcd$BrNum, brdf$brnum)]
+rcd$RIN <- 6.66
+rcd$RNum <- rcd$SAMPLE_ID #fake
+colData(rse_gene$R21) <- rcd
+```
+
+```{r}
+## Add Dataset
+rse_gene <- map2(rse_gene, names(rse_gene), function(r,g){
+  r$Dataset <- g
+  return(r)
+})
+```
+
+```{r}
+#### pheno data ####
+## Extract and standardize pd
+all_pd <- map(rse_gene, colData)
+map_int(all_pd, nrow)
+
+## Check for required cols
+required_cols <- c("SAMPLE_ID", "RNum", "RIN", "Region", "Dataset",
+                   "BrNum", "Dx", "Age", "Sex", "Race", "numReads",
+                   "numMapped", "numUnmapped", "mitoMapped", "totalMapped",
+                   "overallMapRate", "concordMapRate","mitoRate", "rRNA_rate",
+                   "totalAssignedGene","bamFile") # "rna_preSwap_BrNum" ?
+
+all_pd <- map2(all_pd, names(all_pd), function(pd, n) {
+  ## fix colnames
+  cn <- colnames(pd)
+  ## rename column names as needed
+  #for(s in names(colnames_subs)){
+  #  cn <- gsub(colnames_subs[[s]],s,cn)
+  #}
+  colnames(pd) <- cn
+  #Add missing colnames
+  missing_col <- required_cols[!required_cols %in% colnames(pd)]
+  if (length(missing_col)>0) {
+     message("Found missing columns:")
+     message(n, ": ", paste(missing_col, collapse = " "))
+  }
+  if(length(missing_col) != 0) {
+    for(m in missing_col){
+      pd[[m]] <- NA
+    }
+  }
+  return(pd)
+})
+
+## check for additional data
+tt <- table(unlist(map(all_pd, colnames)))
+tt[required_cols]
+nam <- names(tt[tt == length(rse_gene)])
+nam <- nam[!nam %in% required_cols]
+message("\nAdditional cols in all datasets: ",paste(nam, collapse = ", "))
+```
+
+```{r}
+#### combine pd ####
+pd <- do.call("rbind", map(all_pd, ~as.data.frame(.x[,required_cols])))
+message("pd Cols:", ncol(pd), " Samples: ", nrow(pd))
+message("All SAMPLE ID are unique")
+length(unique(pd$SAMPLE_ID)) == nrow(pd)
+
+## summaries
+message("Unique BrNum: ", length(unique(pd$BrNum)))
+table(pd$Region)
+message("Unduplicated brains")
+table(pd$Dx[!duplicated(pd$BrNum)])
+message("Unique RNum: ",length(unique(pd$RNum)))
+message("Dataset Breakdown:")
+table(pd$Dataset)
+
+#make bamFiles all CharacterList
+pd$bamFile = CharacterList(pd$bamFile)
+## update some bam paths
+pd$bamFile[pd$Dataset == "Astellas_DG"] = gsub("/dcl01/lieber/ajaffe/",
+                                               "/dcl01/ajaffe/data/", pd$bamFile[pd$Dataset == "Astellas_DG"])
+pd$bamFile[pd$Dataset == "R21"] = gsub("./",
+                                    "/dcl01/lieber/ajaffe/gpertea/spqz_wrk/R21/results/HISAT2_out/bam_sort/", 
+                                    pd$bamFile[pd$Dataset == "R21"])
+```
+
