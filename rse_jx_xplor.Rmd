@@ -1,0 +1,17 @@
+---
+title: "rse_jx_xplor"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+load("data/astellas_dg_hg38_rseJxn_n263.rda")
+jcd <- as.data.frame(colData(rse_jxn))
+jrd <- as.data.frame(rowData(rse_jxn))
+jgr <- rowRanges(rse_jxn)
+ja <- assays(rse_jxn)$counts
+```
+

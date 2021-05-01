@@ -34,13 +34,20 @@ brdf <- read.table("data/subjects_phenodata.tab", sep="\t", header=T)
 
 ```
 
+Load brain swap data
+```{r}
+pd_swap <- read.csv("data/pd_swap.csv", row.names = 1)
+pd_swap <- unique(pd_swap) #Br0992 duplicated for some reason?
+rownames(pd_swap) <- pd_swap$SAMPLE_ID
+```
+
 
 Fix dataset specific issues.
 ```{r}
 ## R21 is missing all phenotype data and it lacks RNum
 rcd <- colData(rse_gene$R21)
-rcd$BrNum <- lapply(rcd$SAMPLE_ID, function(x) { ax <- strsplit(x, '_'); return(ax[[1]][1]) })
-rcd$Region <- lapply(rcd$SAMPLE_ID, function(x) { ax <- strsplit(x, '_'); return(ax[[1]][2]) })
+rcd$BrNum <- sapply(strsplit(rcd$SAMPLE_ID, split='_'), "[", 1)
+rcd$Region <- sapply(strsplit(rcd$SAMPLE_ID, split='_'), "[", 2)
 rcd$Age <- brdf$age[ match(rcd$BrNum, brdf$brnum)]
 rcd$Sex <- brdf$sex[ match(rcd$BrNum, brdf$brnum)]
 rcd$Race <- brdf$race[ match(rcd$BrNum, brdf$brnum)]
@@ -64,27 +71,32 @@ rse_gene <- map2(rse_gene, names(rse_gene), function(r,g){
 all_pd <- map(rse_gene, colData)
 map_int(all_pd, nrow)
 
+message("Total samples: ", sum(map_int(all_pd, nrow)))
+
+## Correct inconsistent colnames
+colnames_subs <- list("Age" = "AgeDeath",
+                     "Dx" = "PrimaryDx",
+                     "Region" = c("Brain.Region","BrainRegion"))
+colnames_subs <- map(colnames_subs, ~paste(.x, collapse = "|"))
+
 ## Check for required cols
 required_cols <- c("SAMPLE_ID", "RNum", "RIN", "Region", "Dataset",
                    "BrNum", "Dx", "Age", "Sex", "Race", "numReads",
                    "numMapped", "numUnmapped", "mitoMapped", "totalMapped",
                    "overallMapRate", "concordMapRate","mitoRate", "rRNA_rate",
-                   "totalAssignedGene","bamFile") # "rna_preSwap_BrNum" ?
+                   "totalAssignedGene","bamFile", "rna_preSwap_BrNum")
 
-all_pd <- map2(all_pd, names(all_pd), function(pd, n) {
+message("Add Missing col")
+all_pd <- map2(all_pd, names(all_pd), function(pd, n){
   ## fix colnames
   cn <- colnames(pd)
-  ## rename column names as needed
-  #for(s in names(colnames_subs)){
-  #  cn <- gsub(colnames_subs[[s]],s,cn)
-  #}
+  for(s in names(colnames_subs)){
+    cn <- gsub(colnames_subs[[s]],s,cn)
+  }
   colnames(pd) <- cn
   #Add missing colnames
   missing_col <- required_cols[!required_cols %in% colnames(pd)]
-  if (length(missing_col)>0) {
-     message("Found missing columns:")
-     message(n, ": ", paste(missing_col, collapse = " "))
-  }
+  message(n, ": ", paste(missing_col, collapse = " "))
   if(length(missing_col) != 0) {
     for(m in missing_col){
       pd[[m]] <- NA
@@ -92,6 +104,7 @@ all_pd <- map2(all_pd, names(all_pd), function(pd, n) {
   }
   return(pd)
 })
+
 
 ## check for additional data
 tt <- table(unlist(map(all_pd, colnames)))
@@ -105,10 +118,14 @@ message("\nAdditional cols in all datasets: ",paste(nam, collapse = ", "))
 #### combine pd ####
 pd <- do.call("rbind", map(all_pd, ~as.data.frame(.x[,required_cols])))
 message("pd Cols:", ncol(pd), " Samples: ", nrow(pd))
-message("All SAMPLE ID are unique")
-length(unique(pd$SAMPLE_ID)) == nrow(pd)
+if (length(unique(pd$SAMPLE_ID)) == nrow(pd)) {
+  message("All SAMPLE_IDs are unique")
+} else {
+  message("WARNING: not all SAMPLE_IDs are unique!")
+}
+```
 
-## summaries
+```{r}
 message("Unique BrNum: ", length(unique(pd$BrNum)))
 table(pd$Region)
 message("Unduplicated brains")
@@ -116,14 +133,287 @@ table(pd$Dx[!duplicated(pd$BrNum)])
 message("Unique RNum: ",length(unique(pd$RNum)))
 message("Dataset Breakdown:")
 table(pd$Dataset)
+```
 
+```{r}
 #make bamFiles all CharacterList
-pd$bamFile = CharacterList(pd$bamFile)
+if (class(pd$bamFile)=='list') {
+  pd$bamFile = CharacterList(pd$bamFile)
+}
 ## update some bam paths
 pd$bamFile[pd$Dataset == "Astellas_DG"] = gsub("/dcl01/lieber/ajaffe/",
                                                "/dcl01/ajaffe/data/", pd$bamFile[pd$Dataset == "Astellas_DG"])
 pd$bamFile[pd$Dataset == "R21"] = gsub("./",
                                     "/dcl01/lieber/ajaffe/gpertea/spqz_wrk/R21/results/HISAT2_out/bam_sort/", 
                                     pd$bamFile[pd$Dataset == "R21"])
+```
+
+```{r}
+## check to make sure files exist
+# bf = unlist(pd$bamFile)
+# table(file.exists(bf))
+# TRUE
+# 6325
+### --- new way to check
+#message("Check last row of bamFiles for each dataset")
+#bf_last <- unlist(pd$bamFile[cumsum(map_int(all_pd, nrow))])
+#table(file.exists(bf_last))
+## relabel for numeric summaries
+
+##-- older datasets had lists of RNum_FLOWCELL as SAMPLE_IDs 
+if (class(pd$SAMPLE_ID)=='list') {
+  pd$SAMPLE_ID = CharacterList(pd$SAMPLE_ID)
+  pd$trimmed = LogicalList(pd$trimmed)
+  pd$concordMapRate = NumericList(pd$concordMapRate)
+  pd$mitoRate = NumericList(pd$mitoRate)
+  pd$overallMapRate = NumericList(pd$overallMapRate)
+  pd$rRNA_rate = NumericList(pd$rRNA_rate)
+  pd$totalAssignedGene = NumericList(pd$totalAssignedGene)
+  
+  pd$numMapped = IntegerList(pd$numMapped)
+  pd$numReads = IntegerList(pd$numReads)
+  pd$numUnmapped = IntegerList(pd$numUnmapped)
+  pd$mitoMapped = IntegerList(pd$mitoMapped)
+  pd$totalMapped = IntegerList(pd$totalMapped)
+  
+  ## summarize paired libraries
+  pd$concordMapRate = mapply(function(r, n) {
+    sum(r*n)/sum(n)
+  },pd$concordMapRate,pd$numReads)
+  pd$overallMapRate = mapply(function(r, n) {
+    sum(r*n)/sum(n)
+  },pd$overallMapRate,pd$numReads)
+  pd$mitoRate = mapply(function(r, n) {
+    sum(r*n)/sum(n)
+  },pd$mitoRate,pd$numMapped)
+  pd$rRNA_rate = mapply(function(r, n) {
+    sum(r*n)/sum(n)
+  },pd$rRNA_rate,pd$numMapped)
+  pd$totalAssignedGene = mapply(function(r, n) {
+    sum(r*n)/sum(n)
+  },pd$totalAssignedGene,pd$numMapped)
+  
+  pd$numMapped = sapply(pd$numMapped, sum)
+  pd$numReads = sapply(pd$numReads, sum)
+  pd$numUnmapped = sapply(pd$numUnmapped, sum)
+  pd$mitoMapped = sapply(pd$mitoMapped, sum)
+  
+  #--- collapse the remaining lists accordingly
+  pd$SAMPLE_ID = sapply(pd$SAMPLE_ID, paste, collapse=";")
+  pd$trimmed = NULL
+  pd$bamFile = sapply(pd$bamFile, paste, collapse=";")
+}
+
+pd$RIN = as.numeric(pd$RIN)
+# table(pd$RNum == ss(pd$SAMPLE_ID,"_"))
+### -- this does not apply to R21 dataset!
+## should only do this using a ^R\d+ regex!
+##pd$RNum <- ss(pd$SAMPLE_ID,"_")
+pd$RNum <- gsub('^(R\\d+).*', '\\1', pd$SAMPLE_ID, perl=T)
+```
+
+
+```{r}
+#### join counts ####
+## get counts
+countList = lapply(rse_gene, function(x) assays(x)$counts)
+counts = do.call("cbind", countList)
+dim(counts)
+# [1] 58037  5552
+
+## match to pd
+all(ss(rownames(pd),"\\.",2) == colnames(counts))
+
+#Assign SAMPLE_ID as new Identifier
+rownames(pd) <- pd$SAMPLE_ID
+colnames(counts) <- pd$SAMPLE_ID
+
+#### Resolve swaps in colData ####
+# save(pd, file = "count_data/pd_unswapped.Rdata")
+# load("count_data/pd_unswapped.Rdata", verbose = TRUE)
+message("Pre swap+drop pd breakdown")
+table(pd$Dx)
+summary(pd$Age)
+table(pd$Sex)
+table(pd$Race)
+table(is.na(pd$rna_preSwap))
+```
+```{r}
+message("Swap samples in pd")
+table(pd$SAMPLE_ID %in% pd_swap$SAMPLE_ID)
+# FALSE  TRUE 
+# 69  5483
+
+## match up with current pd
+pd_swap <- rbind(pd_swap, pd[!pd$SAMPLE_ID %in% pd_swap$SAMPLE_ID,])
+rownames(pd_swap) <- pd_swap$SAMPLE_ID
+all(rownames(pd) %in% rownames(pd_swap))
+pd_swap <- pd_swap[rownames(pd),]
+dim(pd_swap)
+# [1] 5552   22
+
+swap_cols <- c("BrNum","Dx", "Age", "Sex", "Race","rna_preSwap_BrNum")
+names(swap_cols) <- swap_cols
+map(swap_cols, ~table(!is.na(pd_swap$rna_preSwap_BrNum), pd_swap[[.x]] == pd[[.x]], dnn = c("swap", "values match")))
+```
+
+```{r}
+## Swap data
+pd[!is.na(pd_swap$rna_preSwap_BrNum),swap_cols] <- pd_swap[!is.na(pd_swap$rna_preSwap_BrNum),swap_cols]
+
+# Drop samples
+pd_drops <- pd[pd$BrNum == "drop",]
+pd <- pd[pd$BrNum != "drop",]
+
+##Fix 'Other' Dx
+## note that Br5697 isn't in LIMs
+pd[pd$BrNum == "Br5697",c(swap_cols, "Dataset")]
+# BrNum    Dx   Age Sex Race rna_preSwap_BrNum
+# R14065_HF3JYBBXX Br5697 Other 54.53   M CAUC              <NA>
+# R14284_HCTYLBBXX Br5697 Other 54.53   M CAUC              <NA>
+if (nrow(pd[pd$BrNum == "Br5697",])>0) {
+  pd[pd$BrNum == "Br5697",]$Dx <- "Bipolar"
+}
+message("Post swap+drop pd breakdown")
+dim(pd)
+table(pd$Dx)
+summary(pd$Age)
+table(pd$Sex)
+table(pd$Race)
+
+```
+```{r}
+## convert back to DataFrame
+pd <- DataFrame(pd)
+# pd$bamFile <- CharacterList(strsplit(pd$bamFile, ";"))
+#### Update counts ####
+table(colnames(counts) %in% rownames(pd))
+## Drop dropped samples
+counts = counts[,rownames(pd)]
+
+```
+```{r}
+## gene annotation
+rr = rowRanges(rse_gene$Astellas_DG)
+
+## make rse_gene object
+rse_gene = SummarizedExperiment(
+  assays = list(counts = counts),
+  rowRanges = rr, colData = pd)
+
+save(rse_gene, file = "Astellas_DG_R21.geneRSE.Rdata")
+```
+
+The same phenodata should be used for creating the tx and exon RSE objects
+
+Exon data first:
+```{r}
+pd <- as.data.frame(colData(rse_gene))
+rse_exon <- lapply(rse_filenames$exon, function(x) mget(load(x, verbose = TRUE)))
+## extract only rse_exon data
+rse_exon <- map(rse_exon, pluck, "rse_exon")
+```
+```{r}
+
+## fix colnames
+colnames(rse_exon$Astellas_DG) = rse_exon$Astellas_DG$SAMPLE_ID
+## Filter samples
+original_ncol <- map_int(rse_exon, ncol)
+exon_m <- map(rse_exon, ~colnames(.x) %in% rownames(pd))
+rse_exon <- map2(rse_exon, exon_m, ~.x[,.y])
+  
+data.frame(original_ncol, new_ncol = map_int(rse_exon, ncol)) 
+```
+
+
+```{r}
+## find matching rowRanges of shortest dataset
+#table(map_int(rse_exon, nrow))
+map_int(rse_exon, nrow)
+min_i <- match( min(map_int(rse_exon, nrow)), map_int(rse_exon, nrow))
+names(rse_exon)[[min_i]]
+# [1] "Astellas_DG"
+```
+```{r}
+m_exon <- map(rse_exon, ~findMatches(rowRanges(rse_exon[[min_i]])), rowRanges(.x))
+rse_exon_m <- map2(rse_exon, m_exon, ~.x[subjectHits(.y), ])
+
+exon_rowRanges <- rowRanges(rse_exon_m[[min_i]])
+rse_exon_counts <- map(rse_exon_m, ~assays(.x)$counts)
+```
+
+```{r}
+## combine count data
+rse_exon_counts = do.call("cbind", rse_exon_counts)
+dim(rse_exon_counts)
+
+rse_exon_counts <- rse_exon_counts[,match(rownames(pd), colnames(rse_exon_counts))]
+all(colnames(rse_exon_counts) == rownames(pd))
+```
+
+## Transcripts
+```{r}
+rse_tx <- lapply(rse_filenames$tx, function(x) mget(load(x, verbose = TRUE)))
+## extract only rse_tx data
+rse_tx <- map(rse_tx, pluck, "rse_tx")
+pd <- as.data.frame(colData(rse_gene))
+```
+
+## Fix colnames
+```{r}
+colnames(rse_tx$Astellas_DG) = rse_tx$Astellas_DG$SAMPLE_ID
+colnames(rse_tx$R21) = rse_tx$R21$SAMPLE_ID
+
+## Add tpm assay to Nicotine
+#rowData(rse_tx$Nicotine_NAc)$Length <- 100 #check if 100 is correct length
+#names(assays(rse_tx$Nicotine_NAc)) <- "counts"
+#assays(rse_tx$Nicotine_NAc)$tpm <- getTPM(rse_tx$Nicotine_NAc, "Length")
+
+## Filter samples
+original_ncol <- map_int(rse_tx, ncol)
+tx_m <- map(rse_tx, ~colnames(.x) %in% rownames(pd))
+rse_tx <- map2(rse_tx, tx_m, ~.x[,.y])
+
+data.frame(original_ncol, new_ncol = map_int(rse_tx, ncol))  
+```
+
+```{r}
+## Check # of tx
+table(map_int(rse_tx, nrow))
+# 198093 
+# 11 
+##Check that rownames are all equal
+all(map_lgl(rse_tx, ~all(rownames(.x) == rownames(rse_tx[[1]]))))
+# [1] TRUE
+
+## pick rowRanges data 
+map_int(rse_tx, ~ncol(rowData(.x)))
+```
+```{r}
+## Use R21 rowRanges (all rowData should be the same)
+tx_rowRanges <- rowRanges(rse_tx$R21)
+
+## Extract count data
+rse_tx_tpm <- map(rse_tx, ~assays(.x)$tpm)
+
+## combine count data
+rse_tx_tpm = do.call("cbind", rse_tx_tpm)
+dim(rse_tx_tpm)
+# [1] 198093   5536
+table(rownames(pd) == colnames(rse_tx_tpm))
+
+rse_tx_tpm <- rse_tx_tpm[,match(rownames(pd), colnames(rse_tx_tpm))]
+all(colnames(rse_tx_tpm) == rownames(pd))
+```
+
+```{r}
+## make rse_exon object
+rse_tx = SummarizedExperiment(
+  assays = list(tpm = rse_tx_tpm),
+  rowRanges = tx_rowRanges, colData = pd)
+
+## save
+save(rse_tx, file = "Astellas_DG_R21.txRSE.Rdata")
+
 ```
 
