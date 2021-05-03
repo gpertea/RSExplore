@@ -8,10 +8,111 @@ knitr::opts_chunk$set(echo = TRUE)
 ```
 
 ```{r}
+library(SummarizedExperiment)
+library(dplyr)
+```
+
+```{r}
+library(readxl)
+library(jaffelab)
+xls <- as.data.frame(read_excel('gene_list.xlsx'))
+library(biomaRt)
+mart37 = useEnsembl(biomart="ensembl",GRCh=37, dataset = 'hsapiens_gene_ensembl')
+#
+attrs <- c('ensembl_gene_id', 'hgnc_symbol', 'external_gene_name', 'chromosome_name',  'start_position', 'end_position', 'strand', 'transcript_count') # 'ensembl_transcript_id', 'ccds')
+gd37 <- getBM(mart=mart37, attributes=attrs, filters="ensembl_gene_id", values=xls$EnsemblID) 
+
+## Gencode 25 corresponds to Ensembl 85
+mart38 = useEnsembl(biomart="ensembl", dataset = 'hsapiens_gene_ensembl', version=85)
+gd38 <- getBM(mart=mart38, attributes=attrs, filters="ensembl_gene_id", values=xls$EnsemblID) 
+gmiss <- anti_join(gd37, gd38, by='ensembl_gene_id')
+if (nrow(gmiss)>0) { # any genes recovered this way?
+  gsymr <- getBM(mart=mart38, attributes=attrs, filters="hgnc_symbol", values=gmiss$hgnc_symbol) 
+  gd38 <- rbind(gd38, gsymr)
+}
+```
+
+```{r}
+gmrg <- left_join(gd37, gd38, by=c('hgnc_symbol', 'chromosome_name'))
+colnames(gmrg)=c('grch37_geneID', 'gsym', 'grch37_ext_gname', 'chr', 'grch37_start', 'grch37_end', 'grch37_strand', 'grch37_tcount', 'geneID', 'ext_gname', 'start', 'end', 'strand', 'tcount')
+gmrg$grch37_strand=ifelse(gmrg$grch37_strand<0, '-', '+')
+gmrg$strand=ifelse(gmrg$strand<0, '-', '+')
+gmrg$chr <- paste0('chr', gmrg$chr)
+## special case for gene 'ENSG00000261374', totally lost in GRch38
+## ideally we can do a liftOver for all gene ranges having  is.na(gmrg$geneID)
+
+```
+
+
+
+```{r}
+library(rtracklayer)
+rtl_gtf <- import("data/ann/gencode.v25.annotation.gtf")
+ttbl <- as.data.frame(mcols(rtl_gtf)) %>% filter(type=='transcript') %>% 
+  select(gene_id, gene_type, gene_status, gene_name, transcript_id, transcript_type, transcript_name)
+# get the number of transcripts for each gene:
+gtbl <- ttbl %>% group_by(gene_id, gene_type, gene_status) %>% 
+  summarise(num_transcripts=n(), transcripts=list(transcript_id))
+# test: nrow(subset(gtbl, num_transcripts!=lengths(transcripts)))
+# should be 0!
+
+## ENSG00000261374 has no gene symbol, but in grch37.ensembl.org shows as 
+## RP11-64K12.10 (Clone-based (Vega) gene), 
+### https://grch37.ensembl.org/Homo_sapiens/Gene/Summary?db=core;g=ENSG00000261374
+## has 1 non-coding single-exon transcript ENST00000567002.1 of length 1594
+## maps to location  chr15:40374398-40375991 in GRCh38 coordinates
+
+uix <- which(gmrg$grch37_geneID=='ENSG00000261374')
+# check what genes are in that location on GRCh38/Gencode 25 ?
+ovls <- findOverlaps(GRanges(seqnames="chr15", ranges=IRanges(start=40374398, end=40375991)) , rtl_gtf)
+ghits <- rtl_gtf[subjectHits(ovls)]
+# this shows that this genomic range is now fully contained in the 3' UTR (exon ENSE00000942471.5) 
+# of transcript ENST00000267889.4 (DISP2-001) which is the only protein coding transcript of 
+# the 4 transcripts of gene ENSG00000140323.5 (DISP2)
+## -- list all transcripts for the overlapped gene(s) found:
+rtl_gtf[which(mcols(rtl_gtf)$gene_id %in% ghits$gene_id & mcols(rtl_gtf)$type == 'transcript')]
+### update the table with this info, somehow..
+gmrg[uix,c('geneID', 'ext_gname', 'start', 'end', 'strand', 'tcount')] <-
+  list('ENSG00000140323|ENSE00000942471.5', 'DISP2-001', 40374398, 40375991, '+', 4)
+#note that 
+write.csv(gmrg, 'genes_to_Gencode25.csv', row.names = F, quote = F)
+```
+
+```{r}
+#jxann <- load("data/ann/junction_annotation_hg38_gencode_v25_main.rda")
+# loads theJunctions GRanges object
+
+#f2tx <- load("data/ann/feature_to_Tx_hg38_gencode_v25_main.rda")
+##loads an allTx object
+#exm <- load("data/ann/exonMaps_by_coord_hg38_gencode_v25.rda")
+##loads coordToENSE, coordToTX, coordToEid GRanges object
+```
+
+Make genomic ranges out of our gene list
+```{r}
+ggr <- makeGRangesFromDataFrame(gmrg[,c('chr', 'strand', 'start', 'end', 'grch37_ext_gname', 'geneID', 'ext_gname')], keep.extra.columns = T)
+colnames(mcols(ggr)) <- c('ogname', 'gene_id', 'gname')
+```
+
+
+Now we are ready to subset all the RSE
+The blocks below should be filtered over multiple datasets
+```{r}
 load("data/astellas_dg_hg38_rseJxn_n263.rda")
 jcd <- as.data.frame(colData(rse_jxn))
 jrd <- as.data.frame(rowData(rse_jxn))
 jgr <- rowRanges(rse_jxn)
 ja <- assays(rse_jxn)$counts
+## retrieve all junctions for each of the genomic ranges
+# jovls <- findOverlaps(ggr, jgr, ignore.strand=T)
+## subset rowData accordingly:
+# jrd_hits <- jrd[subjectHits(jovls),]
+## subset genomic ranges:
+## jgr[subjectHits(jovls)]
+### ------------ RSE has a subsetByOverlaps() method!
+rse_jxn_subset <- subsetByOverlaps(rse_jxn, ggr, ignore.strand=T)
+
+
 ```
+
 
