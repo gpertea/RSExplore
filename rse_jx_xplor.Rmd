@@ -9,7 +9,6 @@ knitr::opts_chunk$set(echo = TRUE)
 
 ```{r}
 library(SummarizedExperiment)
-library(dplyr)
 ```
 
 ```{r}
@@ -48,9 +47,11 @@ gmrg$chr <- paste0('chr', gmrg$chr)
 
 ```{r}
 library(rtracklayer)
+library(dplyr)
+
 rtl_gtf <- import("data/ann/gencode.v25.annotation.gtf")
 ttbl <- as.data.frame(mcols(rtl_gtf)) %>% filter(type=='transcript') %>% 
-  select(gene_id, gene_type, gene_status, gene_name, transcript_id, transcript_type, transcript_name)
+  dplyr::select(gene_id, gene_type, gene_status, gene_name, transcript_id, transcript_type, transcript_name)
 
 
 # get the number of transcripts for each gene:
@@ -75,8 +76,9 @@ ghits <- rtl_gtf[subjectHits(ovls)]
 ## -- list all transcripts for the overlapped gene(s) found:
 rtl_gtf[which(mcols(rtl_gtf)$gene_id %in% ghits$gene_id & mcols(rtl_gtf)$type == 'transcript')]
 ### update the table with this info, somehow..
+#|ENSE00000942471.5
 gmrg[uix,c('geneID', 'ext_gname', 'start', 'end', 'strand', 'tcount')] <-
-  list('ENSG00000140323|ENSE00000942471.5', 'DISP2-001', 40374398, 40375991, '+', 4)
+  list('ENSG00000140323', 'DISP2', 40374398, 40375991, '+', 4)
 #note that 
 write.csv(gmrg, 'genes_to_Gencode25.csv', row.names = F, quote = F)
 ```
@@ -113,22 +115,25 @@ load(rse_jxn_file)
 ## subset genomic ranges:
 ## jgr[subjectHits(jovls)]
 ###TODO check - should we use ignore.strand=T ?
-rse_jxn_subset <- subsetByOverlaps(rse_jxn, ggr)
-jgrsub <- rowRanges(rse_jxn_subset)
+rse_jxn <- subsetByOverlaps(rse_jxn, ggr)
+jgrsub <- rowRanges(rse_jxn)
 jovls <- as.data.frame(findOverlaps(ggr, jgrsub))
 
 ## genes HSD3BP4 and HSD3BP5 are too close and there will be junctions overlapping both
 jovlg <- jovls %>% group_by(subjectHits) %>% 
   summarize( genes=paste0(ggr[queryHits]$ogname, collapse = '|'))
-mcols(rowRanges(rse_jxn_subset))$tgene <- jovlg$genes
+mcols(rowRanges(rse_jxn))$tgene <- jovlg$genes
 ## -> we should delete all junctions having !is.na(newGeneSymbol) & (newGeneSymbol!=tgene & tgene!=RP11-64K12.10
 ## TODO FIX this -- C22orf29 is also known as RTL10 (ENSG00000215012) and actually 
 ##                 overlaps exons of GNB1L (ENSG00000185838)!
-to_remove <- as.data.frame(rowData(rse_jxn_subset)) %>% 
+to_remove <- as.data.frame(rowData(rse_jxn)) %>% 
     filter(!is.na(newGeneSymbol) & !grepl('RP11-64K12.10', tgene) & 
              !(str_detect(tgene, fixed(newGeneSymbol)) | str_detect(newGeneSymbol, fixed(tgene) )) )
-rse_jxn_subset <- rse_jxn_subset[ ! (row.names(rowData(rse_jxn_subset)) %in% rownames(to_remove)), ]
-##TODO - save rse_jxn_subset to get it ready for merging later
+
+rse_jxn <- rse_jxn[ ! (row.names(rowData(rse_jxn)) %in% rownames(to_remove)), ]
+rse_jxn <- rse_jxn[, rse_jxn$Dx %in% c('Schizo', 'Control')]
+table(rse_jxn$Dx)
+##TODO - save rse_jxn to get it ready for merging later
 
 ```
 
@@ -138,10 +143,42 @@ Subsetting the exons belonging to the transcripts for each gene
 rse_exon_file <- "data/astellas_dg_hg38_rseExon_n263.rda"
 load(rse_exon_file)
 ###TODO check - do we ever need to process anti-sense exons? (ignore.strand = T)?
-rse_exon_subset <- subsetByOverlaps(rse_exon, ggr)
-rm(rse_exon)
+rse_exon <- subsetByOverlaps(rse_exon, ggr)
 #mcols(exgr)$gid <- gsub('\\.\\d+$', mcols(exgr)$gencodeID)
-xgrsub <- rowRanges(rse_exon_subset)
+xgrsub <- rowRanges(rse_exon)
+xovls <- as.data.frame(findOverlaps(xgrsub, ggr))
+if (nrow(xovls)!=length(xgrsub)) {
+  message("WARNING: exons spanning multiple genes?!")
+  stop();
+  ## genes HSD3BP4 and HSD3BP5 are close will there be junctions overlapping both?
+  #xovlg <- xovls %>% group_by(queryHits) %>% 
+  #  summarize( tgene=paste0(ggr[subjectHits]$ogname, collapse = '|'))
+  #mcols(rowRanges(rse_exon_subset))$tgene <- xovlg$genes
+}
+mcols(rowRanges(rse_exon))$tgene <- ggr[xovls$subjectHits]$ogname
+#xmd <- mcols(rowRanges(rse_exon_subset))
+
+## ? FIX this -- C22orf29 is also known as RTL10 (ENSG00000215012) and actually 
+##                 overlaps exons of GNB1L (ENSG00000185838)!
+#rse_jxn_subset <- rse_jxn_subset[ ! (row.names(rowData(rse_jxn_subset)) %in% 
+#             rownames(to_remove)), ]
+
+rse_exon <- rse_exon[rowData(rse_exon)$ensemblID %in% gmrg$geneID, ]
+rse_exon <- rse_exon[, rse_exon$Dx %in% c('Schizo', 'Control')]
+table(rse_exon$Dx)
+nrow(rse_exon)
+# save this file to be merged later
+
+```
+
+Select transcripts 
+```{r}
+rse_tx_file <- "data/astellas_dg_hg38_rseTx_n263.rda"
+load(rse_tx_file)
+###TODO check - do we ever need to process anti-sense exons? (ignore.strand = T)?
+rse_tx <- subsetByOverlaps(rse_tx, ggr)
+#mcols(exgr)$gid <- gsub('\\.\\d+$', mcols(exgr)$gencodeID)
+xgrsub <- rowRanges(rse_tx)
 xovls <- as.data.frame(findOverlaps(xgrsub, ggr))
 if (nrow(xovls)!=length(xgrsub)) {
   message("WARNING: exons spanning multiple genes?!")
@@ -151,17 +188,53 @@ if (nrow(xovls)!=length(xgrsub)) {
   #  summarize( genes=paste0(ggr[subjectHits]$ogname, collapse = '|'))
   #mcols(rowRanges(rse_exon_subset))$tgene <- xovlg$genes
 }
-mcols(rowRanges(rse_exon_subset))$tgene
-xmd <- mcols(rowRanges(rse_exon_subset))
+mcols(rowRanges(rse_tx))$tgene <- ggr[xovls$subjectHits]$ogname
+#rd <- as.data.frame(rowData(rse_tx))
+# ensemblID is not there, create it from gene_id (!)
+rowData(rse_tx)$ensemblID <- gsub('\\.\\d+$', '', rowData(rse_tx)$gene_id)
+#xmd <- mcols(rowRanges(rse_exon_subset))
 
-## -> we should delete all junctions having !is.na(newGeneSymbol) & (newGeneSymbol!=tgene & tgene!=RP11-64K12.10
-## TODO FIX this -- C22orf29 is also known as RTL10 (ENSG00000215012) and actually 
+## ? FIX this -- C22orf29 is also known as RTL10 (ENSG00000215012) and actually 
 ##                 overlaps exons of GNB1L (ENSG00000185838)!
-to_remove <- as.data.frame(rowData(rse_jxn_subset)) %>% 
-    filter(!is.na(newGeneSymbol) & !grepl('RP11-64K12.10', tgene) & 
-             !(str_detect(tgene, fixed(newGeneSymbol)) | str_detect(newGeneSymbol, fixed(tgene) )) )
-rse_jxn_subset <- rse_jxn_subset[ ! (row.names(rowData(rse_jxn_subset)) %in% rownames(to_remove)), ]
-```
+#rse_jxn_subset <- rse_jxn_subset[ ! (row.names(rowData(rse_jxn_subset)) %in% 
+#             rownames(to_remove)), ]
 
+rse_tx <- rse_tx[rowData(rse_tx)$ensemblID %in% gmrg$geneID, ]
+rse_tx <- rse_tx[, rse_tx$Dx %in% c('Schizo', 'Control')]
+table(rse_tx$Dx)
+nrow(rse_tx)
+
+```
+Finally, genes themselves:
+```{r}
+rse_g_file <- "data/astellas_dg_hg38_rseGene_n263.rda"
+load(rse_g_file)
+rse_gene <- subsetByOverlaps(rse_gene, ggr)
+xgrsub <- rowRanges(rse_gene)
+xovls <- as.data.frame(findOverlaps(xgrsub, ggr))
+if (nrow(xovls)!=length(xgrsub)) {
+  message("WARNING: exons spanning multiple genes?!")
+  stop();
+  ## genes HSD3BP4 and HSD3BP5 are close will there be junctions overlapping both?
+  #xovlg <- xovls %>% group_by(queryHits) %>% 
+  #  summarize( genes=paste0(ggr[subjectHits]$ogname, collapse = '|'))
+  #mcols(rowRanges(rse_exon_subset))$tgene <- xovlg$genes
+}
+mcols(rowRanges(rse_gene))$tgene <- ggr[xovls$subjectHits]$ogname
+#rd <- as.data.frame(rowData(rse_tx))
+# if ensemblID is not there, create it
+#rowData(rse_gene)$ensemblID <- gsub('\\.\\d+$', '', rowData(rse_gene)$gencodeID)
+#xmd <- mcols(rowRanges(rse_exon_subset))
+
+## ? FIX this -- C22orf29 is also known as RTL10 (ENSG00000215012) and actually 
+##                 overlaps exons of GNB1L (ENSG00000185838)!
+#rse_jxn_subset <- rse_jxn_subset[ ! (row.names(rowData(rse_jxn_subset)) %in% 
+#             rownames(to_remove)), ]
+
+rse_gene <- rse_gene[rowData(rse_gene)$ensemblID %in% gmrg$geneID, ]
+rse_gene <- rse_gene[, rse_gene$Dx %in% c('Schizo', 'Control')]
+table(rse_gene$Dx)
+nrow(rse_gene)
+```
 
 
