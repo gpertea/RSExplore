@@ -1,0 +1,59 @@
+---
+title: "25genes_isofrac"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+library(SummarizedExperiment)
+library(dplyr)
+```
+load the tx object I saved earlier and calculate isoform fractions from TPM
+```{r}
+load("data/rse_tx.25g.n2844.Rdata")
+```
+
+```{r}
+tpms <- as.data.frame(assay(rse_tx))
+
+tpms$transcript_id <- rownames(tpms)
+addCols <- c('transcript_id', 'gene_id')
+tpms <- dplyr::select(left_join(tpms, as.data.frame(rowData(rse_tx))[, addCols], by = 'transcript_id'), 
+                     all_of(addCols), everything())
+rownames(tpms) <- tpms$transcript_id
+ns <- length(addCols)+1
+nc <- ncol(tpms)
+csel <- seq(ns, nc) #numeric data columns 
+## -- get sum of TPMs for each gene
+gsum <- as.data.frame( rowsum(x=tpms[, csel], group=tpms$gene_id ) )
+gsum$gene_id <- rownames(gsum)
+rownames(gsum) <- NULL
+## -- compute isoform fractions
+
+gsum <- dplyr::inner_join(
+            tpms[,c('transcript_id','gene_id')],
+            gsum,
+            by='gene_id')
+## make sure row order matches
+if (! all.equal(tpms$transcript_id, gsum$transcript_id)) {
+  message("Reordering gsum..")
+  gsum <- gsum[match(tpms$transcript_id, gsum$transcript_id), ]
+}
+rownames(gsum) <- gsum$transcript_id
+isofrac <- round( tpms[, csel]/gsum[, csel], digits=4)
+# replace NaN with 0 and add two columns for inspection
+isofrac <- isofrac %>% mutate_all(~replace(., is.nan(.), 0))
+
+#isofrac$gene_id <- tpms$gene_id
+## reorder columns to see gene_id before the numeric columns
+#isofrac <- dplyr::select(isofrac, c('gene_id'), everything())
+
+assay(rse_tx, "isofrac") <- as.matrix(isofrac)
+
+save(rse_tx, file="rse_tx.25g.w_isofrac.n2844.Rdata")
+```
+

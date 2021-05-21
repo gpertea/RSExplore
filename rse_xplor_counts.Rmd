@@ -1,0 +1,52 @@
+---
+title: "rse_xplor_counts"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(SummarizedExperiment)
+library(dplyr)
+library(jaffelab)
+library(ggplot2)
+library(plotly)
+```
+
+Load the 410 counts 
+```{r}
+load("azcmp/dlpfc_stmerge.geneRSE.TPM_counts.n410.Rdata") #load rse_geneAZ
+load("azcmp/dlpfc_stmerge.txRSE.lengthscaledTPM_counts.n410.Rdata") #load rse_tx
+grse <- rse_geneAZ
+trse <- rse_txAZ
+```
+
+```{r}
+#assays(grse)
+# tmp  counts
+gcd <- as.data.frame(colData(grse))
+tcd <- as.data.frame(colData(trse))
+grd <- as.data.frame(rowData(grse))
+trd <- as.data.frame(rowData(trse))
+```
+
+
+```{r}
+
+#TPM plot: let's plot the histogram for sample R2809_polyA
+#add a density line (geom_density() which smoothes the histogram):
+sampleID="R2809_polyA"
+gdf <- data.frame( assay(grse[, grse$sample==sampleID]) )
+colnames(gdf) <- 'tpm'
+summary(gdf$tpm)
+```
+
+```{r}
+ggplot(gdf, aes(x=log10(tpm+1)))+ geom_histogram(binwidth = 0.02)
+#           geom_histogram(binwidth=100,  mapping=aes(y=..density..))
+#         +stat_density(color="#4060ff", geom="line")+ggtitle(sampleID))
+         
+```
+

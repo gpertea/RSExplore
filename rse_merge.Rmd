@@ -1,0 +1,694 @@
+---
+title: "rse_merge"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(SummarizedExperiment)
+library(readxl)
+library(jaffelab)
+library(tidyverse)
+library(purrr)
+```
+
+Load subject phenodata (could be loaded from database directly)
+```{r}
+brdf <- read.table("data/subjects_phenodata.tab", sep="\t", header=T)
+
+```
+
+
+First, let's merge previous R21 data with the new re-done 8 samples:
+```{r}
+load("data/R21/rse_gene_Jlab_experiment_n8.Rdata")
+grse8 <- rse_gene
+# fix sample naming :
+grse8$SAMPLE_ID <- rownames(colData(grse8)) <- paste0('Br', grse8$SAMPLE_ID)
+g8pd <- as.data.frame(colData(grse8))
+g8rr <- rowRanges(grse8)
+g8a <- assay(grse8)
+
+load("data/R21/rse_gene_Jlab_experiment_n60.Rdata")
+# rse_gene loaded as R21, will be updated
+g21rr <- rowRanges(rse_gene)
+gpd <- as.data.frame(colData(rse_gene))
+#g21a <- assay(grse21)
+```
+
+Replace matching entries in R21 for the assay matrix AND for colData().
+rowRanges()$meanExprs should also be updated.
+```{r}
+g8rr$meanExprs <- NULL
+g21rr$meanExprs <- NULL
+stopifnot(all.equal(g8rr, g21rr))
+## -- replace the counts in the old R21 array with the new ones
+#g21a[,colnames(g8a)] <- g8a
+assay(rse_gene)[,colnames(assay(grse8))] <- assay(grse8)
+```
+Before replacing the rows, we have to take care of factor conversion 
+(Why doesn't R take care of this automatically?)
+
+```{r}
+## fix factors that are inconsistent between these colData
+misfactors <- sapply( names(gpd), function(col) {
+    (is.factor(gpd[[col]]) | is.factor(g8pd[[col]])) &&
+      !identical( levels(gpd[[col]]), levels(g8pd[[col]]) )
+} )
+ if (sum(misfactors)) warning("releveling factors: ", 
+                               paste(names(gpd)[misfactors], collapse = ","))
+ for (col in names(gpd)[misfactors]) {
+   gpd <- mutate(ungroup(gpd), !!col := as.character(!!rlang::sym(col)))
+   g8pd <- mutate(ungroup(g8pd), !!col := as.character(!!rlang::sym(col)))
+ }
+ #now we can replace the values as needed, without factor mismatch
+ gpd[rownames(g8pd), ] <- g8pd
+ ## - now convert former factors from string back to factor (using a df):
+ for (col in names(gpd)[misfactors]) {
+    message(" converting col '",col, "' back to factor")
+    gpd <- mutate(ungroup(gpd), !!col := factor(!!rlang::sym(col)))
+    #b <- mutate(ungroup(b), !!col := factor(!!rlang::sym(col)))
+ }
+
+# gpd now has the updated/fixed colData()
+```
+
+Add the missing subject phenodata, parsing BrNum and region from SAMPLE_ID
+```{r}
+#gpd$BrNum <- gsub('_[^_]+$','', gpd$SAMPLE_ID, perl=T)
+## or
+#gpd$BrNum <- gsub('^(Br\\d+).*', '\\1', gpd$SAMPLE_ID, perl=T)
+
+gpd$BrNum <- sapply(strsplit(gpd$SAMPLE_ID, split='_'), "[", 1)
+gpd$Region <- sapply(strsplit(gpd$SAMPLE_ID, split='_'), "[", 2)
+gpd$Dataset <- 'R21'
+gpd$Age <- brdf$age[ match(gpd$BrNum, brdf$brnum)]
+gpd$Sex <- brdf$sex[ match(gpd$BrNum, brdf$brnum)]
+gpd$Race <- brdf$race[ match(gpd$BrNum, brdf$brnum)]
+gpd$Dx <- brdf$dx[ match(gpd$BrNum, brdf$brnum)]
+gpd$RIN <- 0.0 # dummy
+gpd$RNum <- gpd$SAMPLE_ID #fake
+# reorder columns
+gpd <- dplyr::select(gpd, SAMPLE_ID, Dataset, RNum, BrNum, Region, Dx, Sex, Race, Age, RIN, everything())
+colData(rse_gene) <- DataFrame(gpd)
+save(rse_gene, file='data/R21/rse_gene_R21fix_n60.Rdata')
+rm(rse_gene) #avoid confusion later
+```
+
+Now do the same for exons, transcripts (update R21 phenodata and replace respective counts/fpkm)
+gpd has now the fixed phenodata!
+```{r}
+## ---- transcripts:
+load("data/R21/rse_tx_Jlab_experiment_n8.Rdata")
+trse8 <- rse_tx
+# fix sample naming :
+trse8$SAMPLE_ID <- rownames(colData(trse8)) <- paste0('Br', trse8$SAMPLE_ID)
+t8rr <- rowRanges(trse8)
+
+load("data/R21/rse_tx_Jlab_experiment_n60.Rdata")
+# rse_tx is loaded and will be updated
+t21rr <- rowRanges(rse_tx)
+#--
+t8rr$meanExprs <- NULL
+t21rr$meanExprs <- NULL?
+stopifnot(all.equal(t8rr, t21rr))
+## -- replace the counts in the old R21 array with the new ones
+#t21a[,colnames(t8a)] <- t8a
+assay(rse_tx)[,colnames(assay(trse8))] <- assay(trse8)
+colData(rse_tx) <- DataFrame(gpd)
+save(rse_tx, file='data/R21/rse_tx_R21fix_n60.Rdata')
+rm(rse_tx) #avoid confusion later
+## --------- do the same for exons:
+load("data/R21/rse_exon_Jlab_experiment_n8.Rdata")
+erse8 <- rse_exon
+# fix sample naming :
+erse8$SAMPLE_ID <- rownames(colData(erse8)) <- paste0('Br', erse8$SAMPLE_ID)
+e8rr <- rowRanges(erse8)
+
+load("data/R21/rse_exon_Jlab_experiment_n60.Rdata")
+# rse_tx is loaded and will be updated
+e21rr <- rowRanges(rse_exon)
+#--
+e8rr$meanExprs <- NULL
+e21rr$meanExprs <- NULL
+stopifnot(all.equal(e8rr, e21rr))
+## -- replace the counts in the old R21 array with the new ones
+#t21a[,colnames(t8a)] <- t8a
+assay(rse_exon)[,colnames(assay(erse8))] <- assay(erse8)
+colData(rse_exon) <- DataFrame(gpd)
+save(rse_exon, file='data/R21/rse_exon_R21fix_n60.Rdata')
+rm(rse_exon) #avoid confusion later
+
+rm(e8rr, e21rr, t21rr, t8rr, g21rr, g8rr, trse8, erse8)
+rm(grse8, g8pd)
+rm(gpd)
+```
+
+
+Load the data from the new Astellas redone data 
+```{r}
+#check the phenotype data first
+dd <- read.csv("data/Astellas/Demo_for_Astellas.csv")
+colnames(dd) <- tolower(colnames(dd))
+colnames(dd) <- gsub('agedeath','age',colnames(dd))
+colnames(dd) <- gsub('primarydx','dx',colnames(dd))
+dd$dx <- sub('Alzheimer', 'AD', dd$dx)
+dd$dx <- gsub('^Preclinical', 'preclinical', dd$dx)
+
+nbr <- anti_join(dd, brdf, by="brnum") # by=c("BrNum"="brnum"))
+if (nrow(nbr)>0) {
+  message("WARNING: Found ",nrow(nbr), " new subjects! (should be added to database)")
+}
+# --- load the new Astellas data and add phenotype info
+load("data/Astellas/rse_gene_Jlab_experiment_n60.Rdata")
+#grsea <- rse_gene
+gapd <- as.data.frame(colData(rse_gene))
+gapd$BrNum <- sapply(strsplit(gapd$SAMPLE_ID, split='_'), "[", 1)
+gapd$Region <- 'DG'
+gapd$Dataset <- 'Astellas_AD'
+gapd$Age <- dd$age[ match(gapd$BrNum, dd$brnum)]
+gapd$Sex <- dd$sex[ match(gapd$BrNum, dd$brnum)]
+gapd$Race <- dd$race[ match(gapd$BrNum, dd$brnum)]
+gapd$Dx <- dd$dx[ match(gapd$BrNum, dd$brnum)]
+gapd$RIN <- 0.0 # dummy
+gapd$RNum <- gapd$SAMPLE_ID #fake
+gapd <- dplyr::select(gapd, SAMPLE_ID, Dataset, RNum, BrNum, 
+                      Region, Dx, Sex, Race, Age, RIN, everything())
+colData(rse_gene) <- DataFrame(gapd)
+save(rse_gene, file='data/Astellas/rse_gene_Astellas_AD_n60.Rdata')
+rm(rse_gene) #avoid confusion later
+
+```
+
+Use the same gapd for Astellas rse_tx and rse_exon
+```{r}
+# --- load the new Astellas data and add phenotype info
+load("data/Astellas/rse_tx_Jlab_experiment_n60.Rdata")
+#trsea <- rse_tx
+colData(rse_tx) <- DataFrame(gapd)
+save(rse_tx, file='data/Astellas/rse_tx_Astellas_AD_n60.Rdata')
+rm(rse_tx)
+## -- same for exons
+load("data/Astellas/rse_exon_Jlab_experiment_n60.Rdata")
+#trsea <- rse_tx
+colData(rse_exon) <- DataFrame(gapd)
+save(rse_exon, file='data/Astellas/rse_exon_Astellas_AD_n60.Rdata')
+rm(rse_exon)
+
+rm(gapd)
+```
+
+
+Load FlowRNA data and update phenotype data, then resave
+```{r}
+#check the phenotype data first
+fd <- read.csv("data/flowrna/Demo_for_FlowRNA.csv")
+colnames(fd) <- tolower(colnames(fd))
+# already have an 'age' column
+#colnames(dd) <- gsub('agedeath','age',colnames(dd))
+colnames(fd) <- gsub('primarydx','dx',colnames(fd))
+#dd$dx <- sub('Alzheimer', 'AD', dd$dx)
+#dd$dx <- gsub('^Preclinical', 'preclinical', dd$dx)
+
+nbr <- anti_join(fd, brdf, by="brnum") # by=c("BrNum"="brnum"))
+if (nrow(nbr)>0) {
+  message("WARNING: Found ",nrow(nbr), " new subjects! (should be added to database)")
+}
+# --- load the new Astellas data and add phenotype info
+load("data/flowrna/rse_gene_Jlab_experiment_n79.Rdata")
+## remove the numeric prefix these rows have
+rse_gene$SAMPLE_ID <- rownames(colData(rse_gene)) <- gsub('^\\d+_','', rse_gene$SAMPLE_ID, perl=T)
+gfpd <- as.data.frame(colData(rse_gene))
+#rownames(gfpd) <- gfpd$SAMPLE_ID
+
+gfpd$BrNum <- sapply(strsplit(gfpd$SAMPLE_ID, split='_'), "[", 1)
+gfpd$Region <- 'DLPFC'
+gfpd$Dataset <- 'FlowRNA'
+gfpd$Age <- fd$age[ match(gfpd$BrNum, fd$brnum)]
+gfpd$Sex <- fd$sex[ match(gfpd$BrNum, fd$brnum)]
+gfpd$Race <- fd$race[ match(gfpd$BrNum, fd$brnum)]
+gfpd$Dx <- fd$dx[ match(gfpd$BrNum, fd$brnum)]
+gfpd$RIN <- 0.0 # dummy
+gfpd$RNum <- gfpd$SAMPLE_ID #fake
+gfpd <- dplyr::select(gfpd, SAMPLE_ID, Dataset, RNum, BrNum, 
+                      Region, Dx, Sex, Race, Age, RIN, everything())
+
+colData(rse_gene) <- DataFrame(gfpd)
+save(rse_gene, file='data/flowrna/rse_gene_FlowRNA_n79.Rdata')
+rm(rse_gene) #avoid confusion later
+
+# save transcript and exon data as well:
+# --- load the new Astellas data and add phenotype info
+load("data/flowrna/rse_tx_Jlab_experiment_n79.Rdata")
+#trsea <- rse_tx
+colData(rse_tx) <- DataFrame(gfpd)
+save(rse_tx, file='data/flowrna/rse_tx_FlowRNA_n79.Rdata')
+rm(rse_tx)
+## -- same for exons
+load("data/flowrna/rse_exon_Jlab_experiment_n79.Rdata")
+#trsea <- rse_tx
+colData(rse_exon) <- DataFrame(gfpd)
+save(rse_exon, file='data/flowrna/rse_exon_FlowRNA_n79.Rdata')
+rm(rse_exon)
+
+rm(gfpd)
+```
+
+
+
+Now merge R21fix data with Astellas_AD and Astellas_DG.
+```{r}
+rse_filenames <- list(gene=list(Astellas_DG="data/astellas_dg_hg38_rseGene_n263.rda",
+                                Astellas_AD="data/Astellas/rse_gene_Astellas_AD_n60.Rdata",
+                                R21="data/R21/rse_gene_R21fix_n60.Rdata"
+                                ),
+                      exon=list(Astellas_DG="data/astellas_dg_hg38_rseExon_n263.rda",
+                                Astellas_AD="data/Astellas/rse_exon_Astellas_AD_n60.Rdata",
+                                R21="data/R21/rse_exon_R21fix_n60.Rdata"
+                                ), 
+                      tx=list(Astellas_DG="data/astellas_dg_hg38_rseTx_n263.rda",
+                              Astellas_AD="data/Astellas/rse_tx_Astellas_AD_n60.Rdata",
+                              R21="data/R21/rse_tx_R21fix_n60.Rdata"
+                              ), 
+                      jx=list(Astellas_DG="data/astellas_dg_hg38_rseJxn_n263.rda",
+                              Astellas_AD="data/Astellas/rse_jx_Astellas_AD_n60.Rdata",
+                              R21="data/R21/rse_jx_R21fix_n60.Rdata" 
+                              ) )
+## load gene data
+rse_gene <- lapply(rse_filenames$gene, function(x) mget(load(x, verbose = TRUE)))
+
+## extract only objects names 'rse_gene'
+rse_gene <- map2(rse_gene, map(rse_gene, ~grep("rse_gene",names(.x))), pluck)
+
+```
+
+Load brain swap data
+```{r}
+pd_swap <- read.csv("data/pd_swap.csv", row.names = 1)
+pd_swap <- unique(pd_swap) #Br0992 duplicated for some reason?
+rownames(pd_swap) <- pd_swap$SAMPLE_ID
+```
+
+
+Fix dataset specific issues? No need to, we have updated these before.
+```{r}
+## R21 is missing all phenotype data and it lacks RNum
+#rcd <- colData(rse_gene$R21)
+#rcd$BrNum <- sapply(strsplit(rcd$SAMPLE_ID, split='_'), "[", 1)
+#rcd$Region <- sapply(strsplit(rcd$SAMPLE_ID, split='_'), "[", 2)
+#rcd$Age <- brdf$age[ match(rcd$BrNum, brdf$brnum)]
+#rcd$Sex <- brdf$sex[ match(rcd$BrNum, brdf$brnum)]
+#rcd$Race <- brdf$race[ match(rcd$BrNum, brdf$brnum)]
+#rcd$Dx <- brdf$dx[ match(rcd$BrNum, brdf$brnum)]
+#rcd$RIN <- 0.00
+#rcd$RNum <- rcd$SAMPLE_ID #fake
+#colData(rse_gene$R21) <- rcd
+```
+
+```{r}
+## Add Dataset
+rse_gene <- map2(rse_gene, names(rse_gene), function(r,g){
+  r$Dataset <- g
+  return(r)
+})
+```
+
+```{r}
+#### pheno data ####
+## Extract and standardize pd
+all_pd <- map(rse_gene, colData)
+map_int(all_pd, nrow)
+
+message("Total samples: ", sum(map_int(all_pd, nrow)))
+
+## Correct inconsistent colnames
+colnames_subs <- list("Age" = "AgeDeath",
+                     "Dx" = "PrimaryDx",
+                     "Region" = c("Brain.Region","BrainRegion"))
+colnames_subs <- map(colnames_subs, ~paste(.x, collapse = "|"))
+
+## Check for required cols
+required_cols <- c("SAMPLE_ID", "RNum", "RIN", "Region", "Dataset",
+                   "BrNum", "Dx", "Age", "Sex", "Race", "numReads",
+                   "numMapped", "numUnmapped", "mitoMapped", "totalMapped",
+                   "overallMapRate", "concordMapRate","mitoRate", "rRNA_rate",
+                   "totalAssignedGene","bamFile", "rna_preSwap_BrNum")
+
+message("Add Missing col")
+all_pd <- map2(all_pd, names(all_pd), function(pd, n){
+  ## fix colnames
+  cn <- colnames(pd)
+  for(s in names(colnames_subs)){
+    cn <- gsub(colnames_subs[[s]],s,cn)
+  }
+  colnames(pd) <- cn
+  #Add missing colnames
+  missing_col <- required_cols[!required_cols %in% colnames(pd)]
+  message(n, ": ", paste(missing_col, collapse = " "))
+  if(length(missing_col) != 0) {
+    for(m in missing_col){
+      pd[[m]] <- NA
+    }
+  }
+  return(pd)
+})
+
+
+## check for additional data
+tt <- table(unlist(map(all_pd, colnames)))
+tt[required_cols]
+nam <- names(tt[tt == length(rse_gene)])
+nam <- nam[!nam %in% required_cols]
+message("\nAdditional cols in all datasets: ",paste(nam, collapse = ", "))
+```
+
+```{r}
+#### combine pd ####
+pd <- do.call("rbind", map(all_pd, ~as.data.frame(.x[,required_cols])))
+message("pd Cols:", ncol(pd), " Samples: ", nrow(pd))
+if (length(unique(pd$SAMPLE_ID)) == nrow(pd)) {
+  message("All SAMPLE_IDs are unique")
+} else {
+  message("WARNING: not all SAMPLE_IDs are unique!")
+}
+```
+
+```{r}
+message("Unique BrNum: ", length(unique(pd$BrNum)))
+table(pd$Region)
+message("Unduplicated brains")
+table(pd$Dx[!duplicated(pd$BrNum)])
+message("Unique RNum: ",length(unique(pd$RNum)))
+message("Dataset Breakdown:")
+table(pd$Dataset)
+```
+
+```{r}
+#make bamFiles all CharacterList
+if (class(pd$bamFile)=='list') {
+  pd$bamFile = CharacterList(pd$bamFile)
+}
+## update some bam paths
+pd$bamFile[pd$Dataset == "Astellas_DG"] = gsub("/dcl01/lieber/ajaffe/",
+                                               "/dcl01/ajaffe/data/", pd$bamFile[pd$Dataset == "Astellas_DG"])
+pd$bamFile[pd$Dataset == "R21"] = gsub("./",
+                                    "/dcl01/lieber/ajaffe/gpertea/spqz_wrk/R21/results/HISAT2_out/bam_sort/", 
+                                    pd$bamFile[pd$Dataset == "R21"])
+
+##TODO update with the real path here!
+```
+
+```{r}
+## check to make sure files exist
+# bf = unlist(pd$bamFile)
+# table(file.exists(bf))
+# TRUE
+# 6325
+### --- new way to check
+#message("Check last row of bamFiles for each dataset")
+#bf_last <- unlist(pd$bamFile[cumsum(map_int(all_pd, nrow))])
+#table(file.exists(bf_last))
+## relabel for numeric summaries
+
+##-- older datasets had lists of RNum_FLOWCELL as SAMPLE_IDs 
+if (class(pd$SAMPLE_ID)=='list') {
+  pd$SAMPLE_ID = CharacterList(pd$SAMPLE_ID)
+  pd$trimmed = LogicalList(pd$trimmed)
+  pd$concordMapRate = NumericList(pd$concordMapRate)
+  pd$mitoRate = NumericList(pd$mitoRate)
+  pd$overallMapRate = NumericList(pd$overallMapRate)
+  pd$rRNA_rate = NumericList(pd$rRNA_rate)
+  pd$totalAssignedGene = NumericList(pd$totalAssignedGene)
+  
+  pd$numMapped = IntegerList(pd$numMapped)
+  pd$numReads = IntegerList(pd$numReads)
+  pd$numUnmapped = IntegerList(pd$numUnmapped)
+  pd$mitoMapped = IntegerList(pd$mitoMapped)
+  pd$totalMapped = IntegerList(pd$totalMapped)
+  
+  ## summarize paired libraries
+  pd$concordMapRate = mapply(function(r, n) {
+    sum(r*n)/sum(n)
+  },pd$concordMapRate,pd$numReads)
+  pd$overallMapRate = mapply(function(r, n) {
+    sum(r*n)/sum(n)
+  },pd$overallMapRate,pd$numReads)
+  pd$mitoRate = mapply(function(r, n) {
+    sum(r*n)/sum(n)
+  },pd$mitoRate,pd$numMapped)
+  pd$rRNA_rate = mapply(function(r, n) {
+    sum(r*n)/sum(n)
+  },pd$rRNA_rate,pd$numMapped)
+  pd$totalAssignedGene = mapply(function(r, n) {
+    sum(r*n)/sum(n)
+  },pd$totalAssignedGene,pd$numMapped)
+  
+  pd$numMapped = sapply(pd$numMapped, sum)
+  pd$numReads = sapply(pd$numReads, sum)
+  pd$numUnmapped = sapply(pd$numUnmapped, sum)
+  pd$mitoMapped = sapply(pd$mitoMapped, sum)
+  
+  #--- collapse the remaining lists accordingly
+  pd$SAMPLE_ID = sapply(pd$SAMPLE_ID, paste, collapse=";")
+  pd$trimmed = NULL
+  pd$bamFile = sapply(pd$bamFile, paste, collapse=";")
+}
+
+pd$RIN = as.numeric(pd$RIN)
+# table(pd$RNum == ss(pd$SAMPLE_ID,"_"))
+### -- this does not apply to R21 or Astellas dataset!
+## should only do this using a ^R\d+ regex!
+##pd$RNum <- ss(pd$SAMPLE_ID,"_")
+pd$RNum <- gsub('^(R\\d+).*', '\\1', pd$SAMPLE_ID, perl=T)
+```
+
+
+```{r}
+#### join counts ####
+## get counts
+countList = lapply(rse_gene, function(x) assays(x)$counts)
+counts = do.call("cbind", countList)
+dim(counts)
+# [1] 58037  5552
+
+## match to pd
+all(ss(rownames(pd),"\\.",2) == colnames(counts))
+
+#Assign SAMPLE_ID as new Identifier
+rownames(pd) <- pd$SAMPLE_ID
+colnames(counts) <- pd$SAMPLE_ID
+
+#### Resolve swaps in colData ####
+# save(pd, file = "count_data/pd_unswapped.Rdata")
+# load("count_data/pd_unswapped.Rdata", verbose = TRUE)
+message("Pre swap+drop pd breakdown")
+table(pd$Dx)
+summary(pd$Age)
+table(pd$Sex)
+table(pd$Race)
+table(is.na(pd$rna_preSwap))
+```
+```{r}
+message("Swap samples in pd")
+table(pd$SAMPLE_ID %in% pd_swap$SAMPLE_ID)
+# FALSE  TRUE 
+# 69  5483
+
+## match up with current pd
+pd_swap <- rbind(pd_swap, pd[!pd$SAMPLE_ID %in% pd_swap$SAMPLE_ID,])
+rownames(pd_swap) <- pd_swap$SAMPLE_ID
+all(rownames(pd) %in% rownames(pd_swap))
+pd_swap <- pd_swap[rownames(pd),]
+dim(pd_swap)
+# [1] 5552   22
+
+swap_cols <- c("BrNum","Dx", "Age", "Sex", "Race","rna_preSwap_BrNum")
+names(swap_cols) <- swap_cols
+map(swap_cols, ~table(!is.na(pd_swap$rna_preSwap_BrNum), pd_swap[[.x]] == pd[[.x]], dnn = c("swap", "values match")))
+```
+
+```{r}
+## Swap data
+pd[!is.na(pd_swap$rna_preSwap_BrNum),swap_cols] <- pd_swap[!is.na(pd_swap$rna_preSwap_BrNum),swap_cols]
+
+# Drop samples
+pd_drops <- pd[pd$BrNum == "drop",]
+pd <- pd[pd$BrNum != "drop",]
+
+##Fix 'Other' Dx
+## note that Br5697 isn't in LIMs
+pd[pd$BrNum == "Br5697",c(swap_cols, "Dataset")]
+# BrNum    Dx   Age Sex Race rna_preSwap_BrNum
+# R14065_HF3JYBBXX Br5697 Other 54.53   M CAUC              <NA>
+# R14284_HCTYLBBXX Br5697 Other 54.53   M CAUC              <NA>
+if (nrow(pd[pd$BrNum == "Br5697",])>0) {
+  pd[pd$BrNum == "Br5697",]$Dx <- "Bipolar"
+}
+message("Post swap+drop pd breakdown")
+dim(pd)
+table(pd$Dx)
+summary(pd$Age)
+table(pd$Sex)
+table(pd$Race)
+
+```
+```{r}
+## convert back to DataFrame
+pd <- DataFrame(pd)
+# pd$bamFile <- CharacterList(strsplit(pd$bamFile, ";"))
+#### Update counts ####
+table(colnames(counts) %in% rownames(pd))
+## Drop dropped samples
+counts = counts[,rownames(pd)]
+
+```
+```{r}
+## gene annotation
+rr = rowRanges(rse_gene$Astellas_DG)
+
+## make rse_gene object
+rse_gene = SummarizedExperiment(
+  assays = list(counts = counts),
+  rowRanges = rr, colData = pd)
+
+save(rse_gene, file = "rse_gene.Astellas_DG_AD_R21_n383.Rdata")
+```
+
+The same phenodata should be used for creating the tx and exon RSE objects
+
+Exon data first:
+```{r}
+pd <- as.data.frame(colData(rse_gene))
+rse_exon <- lapply(rse_filenames$exon, function(x) mget(load(x, verbose = TRUE)))
+## extract only rse_exon data
+rse_exon <- map(rse_exon, pluck, "rse_exon")
+```
+
+```{r}
+
+## fix colnames
+colnames(rse_exon$Astellas_DG) = rse_exon$Astellas_DG$SAMPLE_ID
+## Filter samples
+original_ncol <- map_int(rse_exon, ncol)
+exon_m <- map(rse_exon, ~colnames(.x) %in% rownames(pd))
+rse_exon <- map2(rse_exon, exon_m, ~.x[,.y])
+  
+data.frame(original_ncol, new_ncol = map_int(rse_exon, ncol)) 
+```
+
+
+```{r}
+## find matching rowRanges of shortest dataset
+#table(map_int(rse_exon, nrow))
+map_int(rse_exon, nrow)
+min_i <- match( min(map_int(rse_exon, nrow)), map_int(rse_exon, nrow))
+names(rse_exon)[[min_i]]
+# [1] "Astellas_DG"
+```
+
+```{r}
+m_exon <- map(rse_exon, ~findMatches(rowRanges(rse_exon[[min_i]])), rowRanges(.x))
+rse_exon_m <- map2(rse_exon, m_exon, ~.x[subjectHits(.y), ])
+
+exon_rowRanges <- rowRanges(rse_exon_m[[min_i]])
+rse_exon_counts <- map(rse_exon_m, ~assays(.x)$counts)
+```
+
+```{r}
+## combine count data
+rse_exon_counts = do.call("cbind", rse_exon_counts)
+dim(rse_exon_counts)
+
+rse_exon_counts <- rse_exon_counts[,match(rownames(pd), colnames(rse_exon_counts))]
+all(colnames(rse_exon_counts) == rownames(pd))
+```
+Make rse_exon object
+```{r}
+rse_exon = SummarizedExperiment(
+  assays = list(counts = rse_exon_counts),
+  rowRanges = exon_rowRanges, colData = pd)
+
+rownames(rse_exon) <- rowData(rse_exon)$gencodeID
+rowData(rse_exon)$meanExprs <- NULL
+tempRpkm <- recount::getRPKM(rse_exon, "Length")
+rowData(rse_exon)$meanExprs <- rowMeans(tempRpkm)
+
+## save
+#fn = paste0("RNAseq_Collection_postQC_n",
+#            nrow(pd), "_", length(unique(pd$Dataset)), "dataset_",
+#            gsub("-\\d+$","",Sys.Date()))
+
+save(rse_exon, file = "rse_exon.Astellas_DG_AD_R21_n383.Rdata")
+
+rm(rse_exon)
+```
+
+## Transcripts
+```{r}
+rse_tx <- lapply(rse_filenames$tx, function(x) mget(load(x, verbose = TRUE)))
+## extract only rse_tx data
+rse_tx <- map(rse_tx, pluck, "rse_tx")
+pd <- as.data.frame(colData(rse_gene))
+```
+
+## Fix colnames
+```{r}
+colnames(rse_tx$Astellas_DG) = rse_tx$Astellas_DG$SAMPLE_ID
+colnames(rse_tx$R21) = rse_tx$R21$SAMPLE_ID
+
+## Add tpm assay to Nicotine
+#rowData(rse_tx$Nicotine_NAc)$Length <- 100 #check if 100 is correct length
+#names(assays(rse_tx$Nicotine_NAc)) <- "counts"
+#assays(rse_tx$Nicotine_NAc)$tpm <- getTPM(rse_tx$Nicotine_NAc, "Length")
+
+## Filter samples
+original_ncol <- map_int(rse_tx, ncol)
+tx_m <- map(rse_tx, ~colnames(.x) %in% rownames(pd))
+rse_tx <- map2(rse_tx, tx_m, ~.x[,.y])
+
+data.frame(original_ncol, new_ncol = map_int(rse_tx, ncol))  
+```
+
+```{r}
+## Check # of tx
+table(map_int(rse_tx, nrow))
+# 198093 
+# 11 
+##Check that rownames are all equal
+all(map_lgl(rse_tx, ~all(rownames(.x) == rownames(rse_tx[[1]]))))
+# [1] TRUE
+
+## pick rowRanges data 
+map_int(rse_tx, ~ncol(rowData(.x)))
+```
+```{r}
+## Use R21 rowRanges (all rowData should be the same)
+tx_rowRanges <- rowRanges(rse_tx$R21)
+
+## Extract count data
+rse_tx_tpm <- map(rse_tx, ~assays(.x)$tpm)
+
+## combine count data
+rse_tx_tpm = do.call("cbind", rse_tx_tpm)
+dim(rse_tx_tpm)
+# [1] 198093   5536
+table(rownames(pd) == colnames(rse_tx_tpm))
+
+rse_tx_tpm <- rse_tx_tpm[,match(rownames(pd), colnames(rse_tx_tpm))]
+all(colnames(rse_tx_tpm) == rownames(pd))
+```
+
+```{r}
+## make rse_exon object
+rse_tx = SummarizedExperiment(
+  assays = list(tpm = rse_tx_tpm),
+  rowRanges = tx_rowRanges, colData = pd)
+
+## save
+save(rse_tx, file = "rse_tx.Astellas_DG_AD_R21_n383.Rdata")
+
+```
+
