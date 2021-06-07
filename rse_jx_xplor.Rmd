@@ -106,8 +106,8 @@ load phenodata from the gene merged file, assuming that's the right data to use 
 ```{r}
 library(purrr)
 library(recount)
-library(here)
-#load(here("count_data","RNAseq_Collection_postQC_n5536_11dataset_2021-01_geneRSE.Rdata"), verbose = TRUE)
+#library(here)
+load("count_data/RNAseq_Collection_postQC_n5536_11dataset_2021-01_geneRSE.Rdata", verbose = TRUE)
 #pd <- as.data.frame(colData(rse_gene))
 #phenodata <- pd
 #table(pd$Dataset)
