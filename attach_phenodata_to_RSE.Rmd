@@ -1,0 +1,118 @@
+---
+title: "Attach_Phenodata"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+```{r}
+library(SummarizedExperiment)
+library(readxl)
+library(dplyr)
+```
+```{r}
+load('RTI/rse_gene_Jlab_experiment_n242.Rdata')
+rse_md=as.data.frame(colData(rse_gene))
+
+# read the metadata from an Excel file:
+phenodata <- read_xlsx("RTI/RTI2021.xlsx")
+```
+
+```{r}
+rse_md$RNum <- gsub('^(R\\d+).*', '\\1', rse_md$SAMPLE_ID, perl=T)
+
+cols <- c('RNum', 'RIN', 'BrNum', 'Brain Region', 'PrimaryDx', 'Sex', 'Race', 'AgeDeath' )
+rncols <- c('RNum', 'RIN', 'BrNum', 'Region', 'Dx', 'Sex', 'Race', 'Age' )
+pdadd <- dplyr::select(phenodata, all_of(cols))
+colnames(pdadd) <- rncols
+
+rse_md_new <- dplyr::select(left_join(rse_md, pdadd, by = 'RNum'), 
+                     'SAMPLE_ID', all_of(rncols), everything())
+stopifnot(all.equal(rse_md_new$SAMPLE_ID, rownames(rse_md)))
+rownames(rse_md_new) <- rse_md_new$SAMPLE_ID
+```
+
+
+```{r}
+## and finally we need to assign colData back to the rse_gene
+## NOTE: we have to convert the data frame back to Bioconductor's DataFrame type!
+colData(rse_gene) <- as(rse_md_new, "DataFrame")
+save(rse_gene, file='RTI/rse_gene_RTI_n242.Rdata')
+rm(rse_gene)
+```
+
+
+```{r}
+load('RTI/rse_exon_Jlab_experiment_n242.Rdata')
+rse_md$RNum <- NULL
+all.equal(as.data.frame(colData(rse_exon)), rse_md)
+
+colData(rse_exon) <- as(rse_md_new, "DataFrame")
+save(rse_exon, file='RTI/rse_exon_RTI_n242.Rdata')
+rm(rse_exon)
+```
+
+```{r}
+load('RTI/rse_tx_Jlab_experiment_n242.Rdata')
+stopifnot(all.equal(as.data.frame(colData(rse_tx)), rse_md))
+
+colData(rse_tx) <- as(rse_md_new, "DataFrame")
+save(rse_tx, file='RTI/rse_tx_RTI_n242.Rdata')
+rm(rse_tx)
+```
+
+```{r}
+load('RTI/rse_jx_Jlab_experiment_n242.Rdata')
+stopifnot(all.equal(as.data.frame(colData(rse_jx)), rse_md))
+
+colData(rse_jx) <- as(rse_md_new, "DataFrame")
+save(rse_jx, file='RTI/rse_jx_RTI_n242.Rdata')
+rm(rse_jx)
+```
+
+#--- What if we want to rearrange the columns? Here it is a simple function that just takes a column name
+#--- and the new position it should be in
+##arrange data frame vars by position
+##'vars' must be a named vector, e.g. c("var.name"=1)
+arrange.vars <- function(data, vars){
+    ##stop if not a data.frame (but should work for matrices as well)
+    stopifnot(is.data.frame(data))
+    ##sort out inputs
+    data.nms <- names(data)
+    var.nr <- length(data.nms)
+    var.nms <- names(vars)
+    var.pos <- vars
+    ##sanity checks
+    stopifnot( !any(duplicated(var.nms)), 
+               !any(duplicated(var.pos)) )
+    stopifnot( is.character(var.nms), 
+               is.numeric(var.pos) )
+    stopifnot( all(var.nms %in% data.nms) )
+    stopifnot( all(var.pos > 0), 
+               all(var.pos <= var.nr) )
+
+    ##prepare output
+    out.vec <- character(var.nr)
+    out.vec[var.pos] <- var.nms
+    out.vec[-var.pos] <- data.nms[ !(data.nms %in% var.nms) ]
+    stopifnot( length(out.vec)==var.nr )
+
+    ##re-arrange vars by position
+    data <- data[ , out.vec]
+    return(data)
+}
+```
+
+```{r}
+## now we can rearrange the columns:
+rse_mdre <- arrange.vars(rse_md, c("BrNum"=2))
+rse_mdre <- arrange.vars(rse_mdre, c("Race"=3))
+rse_mdre <- arrange.vars(rse_mdre, c("Age"=4))
+rse_mdre <- arrange.vars(rse_mdre, c("Sex"=5))
+rse_mdre <- arrange.vars(rse_mdre, c("Dx"=6))
+```
+

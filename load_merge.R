@@ -1,9 +1,11 @@
 library(SummarizedExperiment)
 library(readxl)
-load("2002UNHP-0326.obj/rse_gene_Jlab_experiment_n2.Rdata")
+#load("2002UNHP-0326.obj/rse_gene_Jlab_experiment_n2.Rdata")
+load('RTI/rse_gene_Jlab_experiment_n242.Rdata')
 rse_g1 <- rse_gene
 #this loads rse_gene again
-load("2006UNHP-0481.obj/rse_gene_Jlab_experiment_n24.Rdata")
+#load("2006UNHP-0481.obj/rse_gene_Jlab_experiment_n24.Rdata")
+#load('RTI/rse_gene_Jlab_experiment_n242.Rdata')
 #now rse_gene has the object loaded last 
 
 # read the metadata from an Excel file:
